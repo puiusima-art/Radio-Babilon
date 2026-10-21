@@ -1,0 +1,258 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Create minimal Flutter project structure
+        run: |
+          cat << 'EOF' > pubspec.yaml
+          name: radio_babilon
+          description: Aplicatie Radio Babilon
+          publish_to: 'none'
+            version: 1.0.0+1
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+          dependencies:
+            flutter:
+              sdk: flutter
+            just_audio: ^0.9.36
+            audio_service: ^0.18.12
+            flutter_localizations:
+              sdk: flutter
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+          flutter:
+            uses-material-design: true
+          EOF
+
+          mkdir -p android/app/src/main
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="ro.radiobabilon.app">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+              <application
+                  android:label="Radio Babilon"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          mkdir -p lib
+          cat << 'EOF' > lib/main.dart
+          import 'package:flutter/material.dart';
+          import 'package:just_audio/just_audio.dart';
+
+          void main() {
+            runApp(const RadioBabilonApp());
+          }
+
+          class RadioBabilonApp extends StatelessWidget {
+            const RadioBabilonApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Radio Babilon',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  colorScheme: ColorScheme.fromSeed(
+                    seedColor: Colors.deepPurple,
+                    brightness: Brightness.dark,
+                  ),
+                  useMaterial3: true,
+                ),
+                home: const RadioPlayerScreen(),
+              );
+            }
+          }
+
+          class RadioPlayerScreen extends StatefulWidget {
+            const RadioPlayerScreen({super.key});
+
+            @override
+            State<RadioPlayerScreen> createState() => _RadioPlayerScreenState();
+          }
+
+          class _RadioPlayerScreenState extends State<RadioPlayerScreen> {
+            late AudioPlayer _audioPlayer;
+            bool _isPlaying = false;
+            bool _isLoading = false;
+
+            static const String _streamUrl = 'http://138.201.52.248:8027/live';
+
+            @override
+            void initState() {
+              super.initState();
+              _audioPlayer = AudioPlayer();
+              _initAudioPlayer();
+            }
+
+            Future<void> _initAudioPlayer() async {
+              _audioPlayer.playerStateStream.listen((playerState) {
+                final isPlaying = playerState.playing;
+                final processingState = playerState.processingState;
+
+                setState(() {
+                  _isPlaying = isPlaying;
+                  _isLoading = processingState == ProcessingState.buffering ||
+                      processingState == ProcessingState.loading;
+                });
+              });
+            }
+
+            Future<void> _togglePlayPause() async {
+              try {
+                if (_isPlaying) {
+                  await _audioPlayer.stop();
+                } else {
+                  setState(() {
+                    _isLoading = true;
+                  });
+                  await _audioPlayer.setUrl(_streamUrl);
+                  await _audioPlayer.play();
+                }
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Eroare conectare: $e')),
+                );
+              } finally {
+                setState(() {
+                  _isLoading = false;
+                });
+              }
+            }
+
+            @override
+            void dispose() {
+              _audioPlayer.dispose();
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Radio Babilon'),
+                  centerTitle: true,
+                ),
+                body: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Semantics(
+                          label: 'Siglă Radio Babilon',
+                          child: const Icon(
+                            Icons.radio,
+                            size: 120,
+                            color: Colors.deepPurpleAccent,
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+                        const Text(
+                          'Radio Babilon',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          _isPlaying ? 'Transmisie în direct' : 'Oprit',
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: _isPlaying ? Colors.greenAccent : Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 50),
+                        Semantics(
+                          button: true,
+                          enabled: !_isLoading,
+                          label: _isPlaying ? 'Oprește radioul' : 'Pornește radioul',
+                          hint: 'Apasă dublu pentru a comuta redarea audio',
+                          child: InkWell(
+                            onTap: _isLoading ? null : _togglePlayPause,
+                            borderRadius: BorderRadius.circular(50),
+                            child: Container(
+                              width: 100,
+                              height: 100,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.deepPurpleAccent,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.deepPurpleAccent.withOpacity(0.4),
+                                    blurRadius: 15,
+                                    spreadRadius: 5,
+                                  ),
+                                ],
+                              ),
+                              child: _isLoading
+                                  ? const CircularProgressIndicator(color: Colors.white)
+                                  : Icon(
+                                      _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                      size: 60,
+                                      color: Colors.white,
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Build Android APK
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: build/app/outputs/flutter-apk/app-release.apk    
